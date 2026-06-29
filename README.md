@@ -13,14 +13,14 @@ Do you find yourself stuck in the middle of a command-line labyrinth? No worries
 
 ## Quick Setup
 
-Make sure you have docker installed.
+Make sure you have Go (Golang) installed.
 
 1. **Create directories**
    ```bash
    mkdir output logs
    ```
 2. **Build the Binary**
-   - Let's set up the Dingus CLI tool by building the Docker image:
+   - Let's set up the Dingus CLI tool by compiling it:
      ```bash
      ./dingus-copilot-installer.sh
      ```
@@ -33,13 +33,13 @@ Make sure you have docker installed.
    - The `dingus-copilot` binary will be placed in `/usr/local/bin`, ready for use from anywhere in your terminal.
 
 4. **Configure Your API Key**
-   - When you run the tool for the first time, you'll need to enter your OpenAI API key. Don't worry, it'll be saved in the `config.json` file for later and easy to remove if you need to wipe it from your machine 🔑.
+   - When you run the tool for the first time, you'll need to enter your Gemini API key. Don't worry, it'll be saved in the `config.json` file for later and easy to remove if you need to wipe it from your machine 🔑.
 
 5. **Start Using It**
    - Set API key:
      ```bash
      dingus-copilot hi
-     Enter your OpenAI API Key: <YOUR OPENAI API KEY HERE>
+     Enter your Gemini API Key: <YOUR GEMINI API KEY HERE>
      ```
    - To ask Dingus Aid a question, just run:
      ```
@@ -84,7 +84,7 @@ Make sure you have docker installed.
 
 ## Advanced Features
 
-- **OpenAI Integration**: It uses the OpenAI API to generate intelligent command suggestions. This keeps it smart and adaptable to your workflow!
+- **Gemini Integration**: It uses the Gemini API to generate intelligent command suggestions. This keeps it smart and adaptable to your workflow!
 
 ---
 
@@ -113,6 +113,6 @@ Want to make Dingus Aid even smarter? 🧠 Feel free to fork this repo and creat
 
 ## Credits
 
-This tool is powered by the [**Dingus**](http://www.dingusai.dev) team and **OpenAI's GPT models** for intelligent command suggestions.
+This tool is powered by the [**Dingus**](http://www.dingusai.dev) team and **Google's Gemini models** for intelligent command suggestions.
 
 Happy command-line adventuring! 🎉

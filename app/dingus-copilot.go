@@ -19,7 +19,7 @@ import (
 var (
 	configDir     string
 	configFile    string
-	openaiAPIKey  string
+	geminiAPIKey  string
 )
 
 // Command history tracking (in-memory)
@@ -51,10 +51,10 @@ const (
 	colorBold   = "\033[1m"
 )
 
-// API cost rates per million tokens
+// API cost rates per million tokens for Gemini 1.5 Flash
 const (
-	inputTokenCost  = 0.15  // $0.15 per million tokens
-	outputTokenCost = 0.60  // $0.60 per million tokens
+	inputTokenCost  = 0.075 // $0.075 per million tokens
+	outputTokenCost = 0.30  // $0.30 per million tokens
 )
 
 // Initialize config directory and files
@@ -120,7 +120,7 @@ func (h *CommandHistory) GetContext() string {
 // Save API key to a configuration file
 func saveAPIKey(apiKey string) error {
 	configData := map[string]string{
-		"OPENAI_API_KEY": apiKey,
+		"GEMINI_API_KEY": apiKey,
 	}
 	configJSON, err := json.MarshalIndent(configData, "", "  ")
 	if err != nil {
@@ -141,6 +141,10 @@ func loadAPIKey() (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if apiKey, exists := configData["GEMINI_API_KEY"]; exists {
+			return apiKey, nil
+		}
+		// Fallback to OPENAI_API_KEY if they just switched but config still has old key name
 		if apiKey, exists := configData["OPENAI_API_KEY"]; exists {
 			return apiKey, nil
 		}
@@ -158,7 +162,55 @@ func cleanupConfigFiles() error {
 	return nil
 }
 
-// Get command suggestion from OpenAI API and return token usage
+// Structs for Gemini API
+type GeminiPart struct {
+	Text string `json:"text"`
+}
+
+type GeminiContent struct {
+	Parts []GeminiPart `json:"parts"`
+}
+
+type GeminiInstruction struct {
+	Parts []GeminiPart `json:"parts"`
+}
+
+type GeminiConfig struct {
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+}
+
+type GeminiRequest struct {
+	Contents          []GeminiContent    `json:"contents"`
+	SystemInstruction *GeminiInstruction `json:"systemInstruction,omitempty"`
+	GenerationConfig  *GeminiConfig      `json:"generationConfig,omitempty"`
+}
+
+type GeminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []GeminiPart `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	UsageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+	} `json:"usageMetadata"`
+}
+
+func cleanCommand(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, "```") {
+		idx := strings.Index(cmd, "\n")
+		if idx != -1 {
+			cmd = cmd[idx+1:]
+		}
+		cmd = strings.TrimSuffix(cmd, "```")
+	}
+	cmd = strings.ReplaceAll(cmd, "`", "")
+	return strings.TrimSpace(cmd)
+}
+
+// Get command suggestion from Gemini API and return token usage
 func getCommandSuggestion(query string) (string, int, int, error) {
 	// Add command history context to the prompt
 	historyContext := history.GetContext()
@@ -191,26 +243,36 @@ The user query is as follows:
 
 Suggested command:`, historyContext, query)
 
-	reqBody := map[string]interface{}{
-		"model": "gpt-4o-mini",
-		"messages": []interface{}{
-			map[string]interface{}{"role": "system", "content": "You are a helpful assistant designed to suggest valid, safe, and relevant terminal commands based on user input."},
-			map[string]interface{}{"role": "user", "content": prompt},
+	reqBody := GeminiRequest{
+		Contents: []GeminiContent{
+			{
+				Parts: []GeminiPart{
+					{Text: prompt},
+				},
+			},
 		},
-		"max_tokens": 100,
+		SystemInstruction: &GeminiInstruction{
+			Parts: []GeminiPart{
+				{Text: "You are a helpful assistant designed to suggest valid, safe, and relevant terminal commands based on user input."},
+			},
+		},
+		GenerationConfig: &GeminiConfig{
+			MaxOutputTokens: 100,
+		},
 	}
+
 	reqData, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", 0, 0, err
 	}
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(reqData))
+	apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=%s", geminiAPIKey)
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqData))
 	if err != nil {
 		return "", 0, 0, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+openaiAPIKey)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -221,37 +283,25 @@ Suggested command:`, historyContext, query)
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", 0, 0, fmt.Errorf("error from OpenAI API: %s - %s", resp.Status, string(bodyBytes))
+		return "", 0, 0, fmt.Errorf("error from Gemini API: %s - %s", resp.Status, string(bodyBytes))
 	}
 
-	var result map[string]interface{}
+	var result GeminiResponse
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
 		return "", 0, 0, err
 	}
 
-	// Extract token usage
-	promptTokens, completionTokens := 0, 0
-	if usage, ok := result["usage"].(map[string]interface{}); ok {
-		if pt, ok := usage["prompt_tokens"].(float64); ok {
-			promptTokens = int(pt)
-		}
-		if ct, ok := usage["completion_tokens"].(float64); ok {
-			completionTokens = int(ct)
-		}
+	promptTokens := result.UsageMetadata.PromptTokenCount
+	completionTokens := result.UsageMetadata.CandidatesTokenCount
+
+	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
+		rawCmd := result.Candidates[0].Content.Parts[0].Text
+		cleanedCmd := cleanCommand(rawCmd)
+		return cleanedCmd, promptTokens, completionTokens, nil
 	}
 
-	if choices, ok := result["choices"].([]interface{}); ok && len(choices) > 0 {
-		if choice, ok := choices[0].(map[string]interface{}); ok {
-			if message, ok := choice["message"].(map[string]interface{}); ok {
-				if text, ok := message["content"].(string); ok {
-					return strings.TrimSpace(text), promptTokens, completionTokens, nil
-				}
-			}
-		}
-	}
-
-	return "", promptTokens, completionTokens, fmt.Errorf("no valid response from OpenAI API")
+	return "", promptTokens, completionTokens, fmt.Errorf("no valid response from Gemini API")
 }
 
 // Calculate API call cost
@@ -319,26 +369,26 @@ func main() {
 	query := strings.Join(os.Args[1:], " ")
 
 	// Try loading API key from config file
-	openaiAPIKey, err = loadAPIKey()
-	if err != nil || openaiAPIKey == "" {
+	geminiAPIKey, err = loadAPIKey()
+	if err != nil || geminiAPIKey == "" {
 		// If API key is not found or empty, ask user for it and save it
-		fmt.Print("Enter your OpenAI API Key: ")
+		fmt.Print("Enter your Gemini API Key: ")
 		reader := bufio.NewReader(os.Stdin)
 		apiKey, err := reader.ReadString('\n')
 		if err != nil {
 			log.Fatalf("Error reading API key: %v", err)
 		}
-		openaiAPIKey = strings.TrimSpace(apiKey)
+		geminiAPIKey = strings.TrimSpace(apiKey)
 
 		// Save the key to the configuration file
-		err = saveAPIKey(openaiAPIKey)
+		err = saveAPIKey(geminiAPIKey)
 		if err != nil {
 			log.Fatalf("Error saving API key: %v", err)
 		}
 		fmt.Println("API key saved.")
 	}
 
-	// Get the suggested command from OpenAI and token usage
+	// Get the suggested command from Gemini and token usage
 	suggestedCommand, promptTokens, completionTokens, err := getCommandSuggestion(query)
 	if err != nil {
 		log.Fatalf("Error getting command suggestion: %v", err)

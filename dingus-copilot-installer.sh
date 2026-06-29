@@ -61,23 +61,27 @@ else
     log "INFO" "Output directory already exists"
 fi
 
-# Step 2: Check if Docker is installed
-if ! command -v docker &>/dev/null; then
-    log "ERROR" "Docker is not installed. Please install Docker first."
-    exit 1
+# Step 2: Check and install Go if necessary
+if ! command -v go &>/dev/null; then
+    log "WARN" "Go (Golang) is not installed."
+    if command -v apt-get &>/dev/null; then
+        log "INFO" "Attempting to install Go via apt-get..."
+        sudo apt-get update && sudo apt-get install -y golang-go || {
+            log "ERROR" "Failed to install Go automatically. Please install Go manually."
+            exit 1
+        }
+    else
+        log "ERROR" "Please install Go (Golang) to compile directly on Linux."
+        exit 1
+    fi
 fi
 
-if ! command -v docker compose &>/dev/null; then
-    log "ERROR" "Docker Compose is not installed. Please install Docker Compose first."
-    exit 1
-fi
-
-# Step 3: Build the Docker image for dingus-copilot
-log "INFO" "Building the Docker image..."
-if docker compose up --build --abort-on-container-exit; then
-    log "INFO" "Docker build completed successfully"
+# Step 3: Compile the binary directly
+log "INFO" "Compiling the binary..."
+if (cd app && go build -buildvcs=false -o "../$OUTPUT_DIR/$BINARY_NAME"); then
+    log "INFO" "Build completed successfully"
 else
-    log "ERROR" "Docker build failed"
+    log "ERROR" "Build failed"
     exit 1
 fi
 
@@ -105,10 +109,9 @@ if [ ! -w "$INSTALL_DIR" ]; then
         log "ERROR" "sudo command not found. Please run this script with root privileges."
         exit 1
     fi
-    
-    # Copy the binary (with force to overwrite any existing file)
-    log "INFO" "Installing binary to $INSTALL_DIR (overwriting if exists)..."
-    cp -f "$OUTPUT_DIR/$BINARY_NAME" "$INSTALL_DIR/" || {
+    # Copy the binary using sudo
+    log "INFO" "Installing binary to $INSTALL_DIR (overwriting if exists) using sudo..."
+    sudo cp -f "$OUTPUT_DIR/$BINARY_NAME" "$INSTALL_DIR/" || {
         log "ERROR" "Failed to copy binary to $INSTALL_DIR using sudo"
         exit 1
     }
